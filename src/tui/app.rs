@@ -1,5 +1,7 @@
 use crate::config::AlgorithmConfig;
 use crate::particle::Solution;
+use ratatui::text::Line;
+use std::cell::RefCell;
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +51,7 @@ pub struct App {
     pub variant: String,
     pub stagnation_limit: usize,
     pub stagnation_threshold: f64,
+    pub reference_point_str: String,
 
     pub is_running: bool,
     pub current_generation: usize,
@@ -61,6 +64,11 @@ pub struct App {
     pub archive_members: Vec<Solution>,
     pub convergence: Vec<f64>,
     pub reference_point: Option<Vec<f64>>,
+    
+    pub scatter_cache: RefCell<Option<(u64, usize, usize, Vec<Line<'static>>)>>,
+    pub convergence_cache: RefCell<Option<(u64, usize, usize, Vec<Line<'static>>)>>,
+    pub archive_version: u64,
+    pub convergence_version: u64,
 
     pub builtin_problems: Vec<&'static str>,
     pub current_problem_idx: usize,
@@ -97,6 +105,7 @@ impl App {
             variant: default_config.variant,
             stagnation_limit: default_config.stagnation_limit,
             stagnation_threshold: default_config.stagnation_threshold,
+            reference_point_str: String::new(),
 
             is_running: false,
             current_generation: 0,
@@ -109,6 +118,11 @@ impl App {
             archive_members: Vec::new(),
             convergence: Vec::new(),
             reference_point: None,
+            
+            scatter_cache: RefCell::new(None),
+            convergence_cache: RefCell::new(None),
+            archive_version: 0,
+            convergence_version: 0,
 
             builtin_problems: vec![
                 "zdt1", "zdt2", "zdt3", "welded_beam", "pressure_vessel",
@@ -161,6 +175,15 @@ impl App {
                 field_type: FieldType::String,
             },
             ParameterField {
+                label: String::from("Reference Point"),
+                value: if self.reference_point_str.is_empty() {
+                    String::from("(empty = no HV)")
+                } else {
+                    self.reference_point_str.clone()
+                },
+                field_type: FieldType::String,
+            },
+            ParameterField {
                 label: String::from("Stagnation Limit"),
                 value: self.stagnation_limit.to_string(),
                 field_type: FieldType::Usize,
@@ -210,7 +233,12 @@ impl App {
         }
         let fields = self.get_fields();
         if self.selected_field < fields.len() {
-            self.edit_buffer = fields[self.selected_field].value.clone();
+            let value = fields[self.selected_field].value.clone();
+            if self.selected_field == 7 && value == "(empty = no HV)" {
+                self.edit_buffer = String::new();
+            } else {
+                self.edit_buffer = value;
+            }
             self.cursor_pos = self.edit_buffer.len();
             self.mode = AppMode::Editing;
         }
@@ -272,11 +300,29 @@ impl App {
                 }
             }
             7 => {
+                let trimmed = buffer.trim();
+                if trimmed.is_empty() || trimmed == "(empty = no HV)" {
+                    self.reference_point_str = String::new();
+                    self.reference_point = None;
+                } else {
+                    let parsed: Result<Vec<f64>, _> = trimmed
+                        .split(',')
+                        .map(|s| s.trim().parse::<f64>())
+                        .collect();
+                    if let Ok(rp) = parsed {
+                        if !rp.is_empty() {
+                            self.reference_point_str = trimmed.to_string();
+                            self.reference_point = Some(rp);
+                        }
+                    }
+                }
+            }
+            8 => {
                 if let Ok(v) = buffer.parse::<usize>() {
                     self.stagnation_limit = v;
                 }
             }
-            8 => {
+            9 => {
                 if let Ok(v) = buffer.parse::<f64>() {
                     self.stagnation_threshold = v;
                 }
@@ -332,6 +378,14 @@ impl App {
             return;
         }
         self.current_problem_idx = (self.current_problem_idx + 1) % self.builtin_problems.len();
+        self.archive_members.clear();
+        self.convergence.clear();
+        self.current_hv = None;
+        self.current_generation = 0;
+        self.archive_count = 0;
+        self.early_stopped = false;
+        self.archive_version = self.archive_version.wrapping_add(1);
+        self.convergence_version = self.convergence_version.wrapping_add(1);
         self.status_message = format!(
             "Switched to problem: {}",
             self.builtin_problems[self.current_problem_idx]

@@ -56,3 +56,8 @@ htmlcov/
 # Added by cargo
 
 /target
+
+# Output files
+pareto_front.csv
+convergence.json
+*_merged.csv

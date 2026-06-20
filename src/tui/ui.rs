@@ -269,7 +269,27 @@ fn draw_scatter_panel(f: &mut Frame<'_>, app: &App, area: Rect) {
     let inner_area = block.inner(area);
     f.render_widget(block, area);
 
-    let scatter_content = render_scatter_plot(app, inner_area.width as usize, inner_area.height as usize);
+    let width = inner_area.width as usize;
+    let height = inner_area.height as usize;
+    
+    let scatter_content = {
+        let cache = app.scatter_cache.borrow();
+        if let Some((ver, w, h, ref lines)) = *cache {
+            if ver == app.archive_version && w == width && h == height {
+                lines.clone()
+            } else {
+                drop(cache);
+                let new_lines = render_scatter_plot(app, width, height);
+                *app.scatter_cache.borrow_mut() = Some((app.archive_version, width, height, new_lines.clone()));
+                new_lines
+            }
+        } else {
+            drop(cache);
+            let new_lines = render_scatter_plot(app, width, height);
+            *app.scatter_cache.borrow_mut() = Some((app.archive_version, width, height, new_lines.clone()));
+            new_lines
+        }
+    };
     
     let paragraph = Paragraph::new(scatter_content)
         .style(Style::default().fg(Color::White));
@@ -408,7 +428,27 @@ fn draw_convergence_panel(f: &mut Frame<'_>, app: &App, area: Rect) {
     let inner_area = block.inner(area);
     f.render_widget(block, area);
 
-    let convergence_content = render_convergence_plot(app, inner_area.width as usize, inner_area.height as usize);
+    let width = inner_area.width as usize;
+    let height = inner_area.height as usize;
+    
+    let convergence_content = {
+        let cache = app.convergence_cache.borrow();
+        if let Some((ver, w, h, ref lines)) = *cache {
+            if ver == app.convergence_version && w == width && h == height {
+                lines.clone()
+            } else {
+                drop(cache);
+                let new_lines = render_convergence_plot(app, width, height);
+                *app.convergence_cache.borrow_mut() = Some((app.convergence_version, width, height, new_lines.clone()));
+                new_lines
+            }
+        } else {
+            drop(cache);
+            let new_lines = render_convergence_plot(app, width, height);
+            *app.convergence_cache.borrow_mut() = Some((app.convergence_version, width, height, new_lines.clone()));
+            new_lines
+        }
+    };
     
     let paragraph = Paragraph::new(convergence_content)
         .style(Style::default().fg(Color::White));

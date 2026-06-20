@@ -262,15 +262,7 @@ fn start_optimization(
 
     let problem = problem::load_builtin(&problem_name)?;
 
-    let ref_point = if problem.num_objectives() == 2 {
-        match problem_name.as_str() {
-            "zdt1" | "zdt2" | "zdt3" => Some(vec![1.0, 10.0]),
-            "welded_beam" => Some(vec![200.0, 0.1]),
-            _ => None,
-        }
-    } else {
-        None
-    };
+    let ref_point = app.reference_point.clone();
 
     app.is_running = true;
     app.current_generation = 0;
@@ -278,11 +270,15 @@ fn start_optimization(
     app.current_hv = ref_point.as_ref().map(|_| 0.0);
     app.archive_members = Vec::new();
     app.convergence = Vec::new();
-    app.reference_point = ref_point.clone();
     app.start_time = Some(Instant::now());
     app.elapsed_time = 0.0;
     app.early_stopped = false;
-    app.status_message = format!("Running {}... Press S to stop", problem_name);
+    
+    if ref_point.is_some() {
+        app.status_message = format!("Running {}... Press S to stop", problem_name);
+    } else {
+        app.status_message = format!("Running {} (no ref point, HV disabled)... Press S to stop", problem_name);
+    }
 
     let tx = algo_tx.clone();
     let stop = stop_flag.clone();
@@ -314,9 +310,13 @@ fn start_optimization(
                     });
                 }
 
-                if iter % 10 == 0 || iter == max_iter || iter - last_scatter >= 10 {
+                if iter % 25 == 0 || iter == max_iter || iter - last_scatter >= 25 {
                     last_scatter = iter;
-                    let _ = tx.send(AlgoMessage::ArchiveSnapshot(archive.to_vec()));
+                    let archive_snapshot: Vec<Solution> = archive.iter()
+                        .take(200)
+                        .cloned()
+                        .collect();
+                    let _ = tx.send(AlgoMessage::ArchiveSnapshot(archive_snapshot));
                 }
 
                 true
@@ -355,13 +355,16 @@ fn handle_algo_message(app: &mut App, msg: AlgoMessage) {
                 } else {
                     app.convergence.push(archive_size as f64);
                 }
+                app.convergence_version = app.convergence_version.wrapping_add(1);
             }
         }
         AlgoMessage::ArchiveSnapshot(archive) => {
             app.archive_members = archive;
+            app.archive_version = app.archive_version.wrapping_add(1);
         }
         AlgoMessage::Convergence(conv) => {
             app.convergence = conv;
+            app.convergence_version = app.convergence_version.wrapping_add(1);
         }
         AlgoMessage::Finished {
             archive,
@@ -374,7 +377,9 @@ fn handle_algo_message(app: &mut App, msg: AlgoMessage) {
             app.current_generation = final_iter;
             app.archive_count = archive.len();
             app.archive_members = archive;
-            app.convergence = convergence.clone();
+            app.archive_version = app.archive_version.wrapping_add(1);
+            app.convergence = convergence;
+            app.convergence_version = app.convergence_version.wrapping_add(1);
             app.early_stopped = early_stopped;
 
             if let Some(ref rp) = app.reference_point {
