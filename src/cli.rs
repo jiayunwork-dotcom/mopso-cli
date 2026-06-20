@@ -66,6 +66,9 @@ pub struct Cli {
 
     #[arg(long, help = "Stagnation threshold for early stopping")]
     pub stagnation_threshold: Option<f64>,
+
+    #[arg(long, help = "Launch interactive TUI mode")]
+    pub tui: bool,
 }
 
 struct RunResult {
@@ -164,7 +167,8 @@ pub fn run(cli: Cli) -> Result<(), String> {
             &config.algorithm,
             ref_point.as_deref(),
             &mut rng,
-            &mut |iter, max_iter, archive_size, hv| {
+            &mut |iter, max_iter, archive, hv| {
+                let archive_size = archive.len();
                 if iter % progress_interval == 0 || iter == max_iter {
                     if num_runs > 1 {
                         eprint!("\r  Run {}/{} Gen {}/{} | Archive: {} | HV: {}   ",
@@ -177,6 +181,7 @@ pub fn run(cli: Cli) -> Result<(), String> {
                     }
                     let _ = std::io::stderr().flush();
                 }
+                true
             },
         );
 

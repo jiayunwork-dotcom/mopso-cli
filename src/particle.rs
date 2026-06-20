@@ -1,7 +1,7 @@
 use crate::problem::Problem;
 use rand::Rng;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Solution {
     pub position: Vec<f64>,
     pub objectives: Vec<f64>,

@@ -17,7 +17,7 @@ pub fn run_mopso<R: Rng>(
     config: &AlgorithmConfig,
     ref_point: Option<&[f64]>,
     rng: &mut R,
-    progress_callback: &mut dyn FnMut(usize, usize, usize, Option<f64>),
+    progress_callback: &mut dyn FnMut(usize, usize, &[Solution], Option<f64>) -> bool,
 ) -> MopsoResult {
     let pop_size = config.population_size;
     let max_iter = config.max_iterations;
@@ -121,7 +121,13 @@ pub fn run_mopso<R: Rng>(
         }
         prev_metric = Some(current_metric);
 
-        progress_callback(iter + 1, max_iter, archive.members.len(), hv);
+        let should_continue = progress_callback(iter + 1, max_iter, &archive.members, hv);
+        
+        if !should_continue {
+            early_stopped = true;
+            final_iter = iter + 1;
+            break;
+        }
 
         if stagnation_count >= stagnation_limit {
             early_stopped = true;

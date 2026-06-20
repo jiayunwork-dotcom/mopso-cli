@@ -1,8 +1,8 @@
 use crate::config::{VariableConfig, ProblemConfig, Config};
 use crate::expr::CompiledExpr;
 
-type EvalFn = Box<dyn Fn(&[f64]) -> Vec<f64>>;
-type ConstraintFn = Box<dyn Fn(&[f64]) -> Vec<f64>>;
+type EvalFn = Box<dyn Fn(&[f64]) -> Vec<f64> + Send + Sync>;
+type ConstraintFn = Box<dyn Fn(&[f64]) -> Vec<f64> + Send + Sync>;
 
 pub struct Problem {
     pub variables: Vec<VariableConfig>,
