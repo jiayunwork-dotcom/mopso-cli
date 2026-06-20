@@ -180,7 +180,22 @@ pub fn run(cli: Cli) -> Result<(), String> {
             },
         );
 
-        let hv = ref_point.as_ref().map(|rp| metrics::hypervolume(&result.archive_members, rp));
+        let final_hv = ref_point.as_ref().map(|rp| metrics::hypervolume(&result.archive_members, rp));
+        if num_runs > 1 {
+            eprint!("\r  Run {}/{} Gen {}/{} | Archive: {} | HV: {}   ",
+                run_idx + 1, num_runs, result.final_iteration, config.algorithm.max_iterations,
+                result.archive_members.len(),
+                final_hv.map(|v| format!("{:.6}", v)).unwrap_or("N/A".to_string()));
+        } else {
+            eprint!("\r  Gen {}/{} | Archive: {} | HV: {}   ",
+                result.final_iteration, config.algorithm.max_iterations,
+                result.archive_members.len(),
+                final_hv.map(|v| format!("{:.6}", v)).unwrap_or("N/A".to_string()));
+        }
+        let _ = std::io::stderr().flush();
+        eprintln!();
+
+        let hv = final_hv;
         let igd = true_pareto.as_ref().map(|tp| metrics::igd(&result.archive_members, tp));
 
         if let Some(h) = hv {
@@ -202,7 +217,6 @@ pub fn run(cli: Cli) -> Result<(), String> {
         });
 
         if num_runs > 1 {
-            eprintln!();
             if result.early_stopped {
                 eprintln!("  Run {}/{} finished: Early stopped at generation {}",
                     run_idx + 1, num_runs, result.final_iteration);
@@ -211,9 +225,6 @@ pub fn run(cli: Cli) -> Result<(), String> {
                     run_idx + 1, num_runs, run_results[run_idx].archive_members.len());
             }
         }
-    }
-    if num_runs == 1 {
-        eprintln!();
     }
 
     let output_csv = cli.output_csv.as_deref().unwrap_or(&config.output.pareto_csv);
@@ -337,11 +348,11 @@ fn merge_nondominated(solutions: &[Solution]) -> Vec<Solution> {
         let mut to_remove = Vec::new();
 
         for (i, existing) in result.iter().enumerate() {
-            match sol.dominates(existing) {
-                crate::particle::Dominance::Dominates => {
+            match constraint_dominance(sol, existing) {
+                ConstraintDominance::Dominates => {
                     to_remove.push(i);
                 }
-                crate::particle::Dominance::Dominated => {
+                ConstraintDominance::Dominated => {
                     dominated = true;
                     break;
                 }
@@ -357,6 +368,35 @@ fn merge_nondominated(solutions: &[Solution]) -> Vec<Solution> {
         }
     }
     result
+}
+
+#[derive(PartialEq)]
+enum ConstraintDominance {
+    Dominates,
+    Dominated,
+    Equal,
+    Nondominated,
+}
+
+fn constraint_dominance(a: &Solution, b: &Solution) -> ConstraintDominance {
+    match (a.is_feasible(), b.is_feasible()) {
+        (true, true) => match a.dominates(b) {
+            crate::particle::Dominance::Dominates => ConstraintDominance::Dominates,
+            crate::particle::Dominance::Dominated => ConstraintDominance::Dominated,
+            _ => ConstraintDominance::Nondominated,
+        },
+        (true, false) => ConstraintDominance::Dominates,
+        (false, true) => ConstraintDominance::Dominated,
+        (false, false) => {
+            if a.constraint_violation < b.constraint_violation - 1e-12 {
+                ConstraintDominance::Dominates
+            } else if b.constraint_violation < a.constraint_violation - 1e-12 {
+                ConstraintDominance::Dominated
+            } else {
+                ConstraintDominance::Equal
+            }
+        }
+    }
 }
 
 fn add_suffix_to_filename(path: &str, suffix: &str) -> String {
