@@ -37,6 +37,10 @@ pub struct AlgorithmConfig {
     pub grid_divisions: usize,
     #[serde(default)]
     pub variant: String,
+    #[serde(default = "default_stagnation_limit")]
+    pub stagnation_limit: usize,
+    #[serde(default = "default_stagnation_threshold")]
+    pub stagnation_threshold: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,6 +61,8 @@ impl Default for AlgorithmConfig {
             c2: default_c2(),
             grid_divisions: default_grid_divisions(),
             variant: "standard".to_string(),
+            stagnation_limit: default_stagnation_limit(),
+            stagnation_threshold: default_stagnation_threshold(),
         }
     }
 }
@@ -67,6 +73,8 @@ fn default_archive_size() -> usize { 200 }
 fn default_c1() -> f64 { 2.0 }
 fn default_c2() -> f64 { 2.0 }
 fn default_grid_divisions() -> usize { 20 }
+fn default_stagnation_limit() -> usize { 50 }
+fn default_stagnation_threshold() -> f64 { 1e-6 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OutputConfig {

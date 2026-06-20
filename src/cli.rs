@@ -57,6 +57,24 @@ pub struct Cli {
 
     #[arg(long, help = "Random seed for reproducibility")]
     pub seed: Option<u64>,
+
+    #[arg(long, help = "Number of independent runs", default_value = "1")]
+    pub runs: Option<usize>,
+
+    #[arg(long, help = "Stagnation limit for early stopping (generations)")]
+    pub stagnation_limit: Option<usize>,
+
+    #[arg(long, help = "Stagnation threshold for early stopping")]
+    pub stagnation_threshold: Option<f64>,
+}
+
+struct RunResult {
+    archive_members: Vec<Solution>,
+    convergence: Vec<f64>,
+    hv: Option<f64>,
+    igd: Option<f64>,
+    final_iteration: usize,
+    early_stopped: bool,
 }
 
 pub fn run(cli: Cli) -> Result<(), String> {
@@ -94,6 +112,12 @@ pub fn run(cli: Cli) -> Result<(), String> {
     if let Some(ref v) = cli.variant {
         config.algorithm.variant = v.clone();
     }
+    if let Some(v) = cli.stagnation_limit {
+        config.algorithm.stagnation_limit = v;
+    }
+    if let Some(v) = cli.stagnation_threshold {
+        config.algorithm.stagnation_threshold = v;
+    }
 
     let ref_point: Option<Vec<f64>> = if let Some(ref rp_str) = cli.reference_point {
         let parsed: Result<Vec<f64>, _> = rp_str.split(',').map(|s| s.trim().parse()).collect();
@@ -106,6 +130,7 @@ pub fn run(cli: Cli) -> Result<(), String> {
         .or(config.output.true_pareto_file.as_deref());
 
     let problem = problem::resolve_problem(&config)?;
+    let num_runs = cli.runs.unwrap_or(1);
 
     eprintln!("Problem: {} variables, {} objectives",
         problem.num_variables(), problem.num_objectives());
@@ -114,64 +139,232 @@ pub fn run(cli: Cli) -> Result<(), String> {
         config.algorithm.population_size,
         config.algorithm.max_iterations,
         config.algorithm.archive_size);
+    eprintln!("Runs: {}", num_runs);
 
     let progress_interval = cli.progress_interval.unwrap_or(50);
-    let mut rng = match cli.seed {
-        Some(s) => rand::rngs::StdRng::seed_from_u64(s),
-        None => rand::rngs::StdRng::from_entropy(),
+    let base_seed = cli.seed.unwrap_or_else(|| rand::random::<u64>());
+
+    let true_pareto = if let Some(tp_path) = true_pareto_path {
+        Some(metrics::load_true_pareto(tp_path)?)
+    } else {
+        None
     };
 
-    let result = mopso::run_mopso(
-        &problem,
-        &config.algorithm,
-        ref_point.as_deref(),
-        &mut rng,
-        &mut |iter, max_iter, archive_size, hv| {
-            if iter % progress_interval == 0 || iter == max_iter {
-                eprint!("\r  Gen {}/{} | Archive: {} | HV: {}   ",
-                    iter, max_iter, archive_size,
-                    hv.map(|v| format!("{:.6}", v)).unwrap_or("N/A".to_string()));
-                let _ = std::io::stderr().flush();
+    let mut run_results: Vec<RunResult> = Vec::new();
+    let mut best_run_idx = 0;
+    let mut best_hv = f64::NEG_INFINITY;
+    let mut all_solutions: Vec<Solution> = Vec::new();
+
+    for run_idx in 0..num_runs {
+        let run_seed = base_seed.wrapping_add(run_idx as u64);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(run_seed);
+
+        let result = mopso::run_mopso(
+            &problem,
+            &config.algorithm,
+            ref_point.as_deref(),
+            &mut rng,
+            &mut |iter, max_iter, archive_size, hv| {
+                if iter % progress_interval == 0 || iter == max_iter {
+                    if num_runs > 1 {
+                        eprint!("\r  Run {}/{} Gen {}/{} | Archive: {} | HV: {}   ",
+                            run_idx + 1, num_runs, iter, max_iter, archive_size,
+                            hv.map(|v| format!("{:.6}", v)).unwrap_or("N/A".to_string()));
+                    } else {
+                        eprint!("\r  Gen {}/{} | Archive: {} | HV: {}   ",
+                            iter, max_iter, archive_size,
+                            hv.map(|v| format!("{:.6}", v)).unwrap_or("N/A".to_string()));
+                    }
+                    let _ = std::io::stderr().flush();
+                }
+            },
+        );
+
+        let hv = ref_point.as_ref().map(|rp| metrics::hypervolume(&result.archive_members, rp));
+        let igd = true_pareto.as_ref().map(|tp| metrics::igd(&result.archive_members, tp));
+
+        if let Some(h) = hv {
+            if h > best_hv {
+                best_hv = h;
+                best_run_idx = run_idx;
             }
-        },
-    );
-    eprintln!();
+        }
+
+        all_solutions.extend(result.archive_members.clone());
+
+        run_results.push(RunResult {
+            archive_members: result.archive_members,
+            convergence: result.convergence,
+            hv,
+            igd,
+            final_iteration: result.final_iteration,
+            early_stopped: result.early_stopped,
+        });
+
+        if num_runs > 1 {
+            eprintln!();
+            if result.early_stopped {
+                eprintln!("  Run {}/{} finished: Early stopped at generation {}",
+                    run_idx + 1, num_runs, result.final_iteration);
+            } else {
+                eprintln!("  Run {}/{} finished: {} solutions",
+                    run_idx + 1, num_runs, run_results[run_idx].archive_members.len());
+            }
+        }
+    }
+    if num_runs == 1 {
+        eprintln!();
+    }
 
     let output_csv = cli.output_csv.as_deref().unwrap_or(&config.output.pareto_csv);
     let output_json = cli.output_json.as_deref().unwrap_or(&config.output.convergence_json);
 
-    write_csv(&result.archive_members, &problem, output_csv)?;
-    write_convergence_json(&result.convergence, output_json)?;
+    if num_runs == 1 {
+        let result = &run_results[0];
+        write_csv(&result.archive_members, &problem, output_csv)?;
+        write_convergence_json(&result.convergence, output_json)?;
 
-    eprintln!("\n=== Results ===");
-    eprintln!("Number of Pareto solutions: {}", result.archive_members.len());
+        eprintln!("\n=== Results ===");
+        if result.early_stopped {
+            eprintln!("Early stopped at generation {}", result.final_iteration);
+        }
+        eprintln!("Number of Pareto solutions: {}", result.archive_members.len());
 
-    if let Some(ref rp) = ref_point {
-        let hv = metrics::hypervolume(&result.archive_members, rp);
-        eprintln!("Hypervolume: {:.6}", hv);
+        if let Some(hv) = result.hv {
+            eprintln!("Hypervolume: {:.6}", hv);
+        }
+
+        if let Some(igd_val) = result.igd {
+            eprintln!("IGD: {:.6}", igd_val);
+        }
+
+        let sp = metrics::spacing(&result.archive_members);
+        eprintln!("Spacing: {:.6}", sp);
+
+        let feasible_count = result.archive_members.iter().filter(|s| s.is_feasible()).count();
+        eprintln!("Feasible solutions: {}/{}", feasible_count, result.archive_members.len());
+
+        if problem.num_objectives() >= 2 {
+            print_ascii_scatter(&result.archive_members);
+        }
+
+        eprintln!("\nOutputs:");
+        eprintln!("  Pareto front: {}", output_csv);
+        eprintln!("  Convergence:  {}", output_json);
+    } else {
+        let best_result = &run_results[best_run_idx];
+        write_csv(&best_result.archive_members, &problem, output_csv)?;
+        write_convergence_json(&best_result.convergence, output_json)?;
+
+        let merged_solutions = merge_nondominated(&all_solutions);
+        let merged_csv_path = add_suffix_to_filename(output_csv, "_merged");
+        write_csv(&merged_solutions, &problem, &merged_csv_path)?;
+
+        eprintln!("\n=== Statistics Summary ===");
+        eprintln!("Number of runs: {}", num_runs);
+        eprintln!("Best run: Run {} (HV: {})",
+            best_run_idx + 1,
+            run_results[best_run_idx].hv.map(|v| format!("{:.6}", v)).unwrap_or("N/A".to_string()));
+
+        if ref_point.is_some() {
+            let hv_values: Vec<f64> = run_results.iter().filter_map(|r| r.hv).collect();
+            if !hv_values.is_empty() {
+                let (mean, std) = mean_std(&hv_values);
+                let min_val = hv_values.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_val = hv_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                eprintln!("\nHypervolume:");
+                eprintln!("  Mean:    {:.6}", mean);
+                eprintln!("  Std:     {:.6}", std);
+                eprintln!("  Best:    {:.6}", max_val);
+                eprintln!("  Worst:   {:.6}", min_val);
+            }
+        }
+
+        if true_pareto.is_some() {
+            let igd_values: Vec<f64> = run_results.iter().filter_map(|r| r.igd).collect();
+            if !igd_values.is_empty() {
+                let (mean, std) = mean_std(&igd_values);
+                let min_val = igd_values.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_val = igd_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                eprintln!("\nIGD:");
+                eprintln!("  Mean:    {:.6}", mean);
+                eprintln!("  Std:     {:.6}", std);
+                eprintln!("  Best:    {:.6}", min_val);
+                eprintln!("  Worst:   {:.6}", max_val);
+            }
+        }
+
+        let sol_counts: Vec<usize> = run_results.iter().map(|r| r.archive_members.len()).collect();
+        let (sol_mean, sol_std) = mean_std_usize(&sol_counts);
+        eprintln!("\nNumber of solutions:");
+        eprintln!("  Mean:    {:.2}", sol_mean);
+        eprintln!("  Std:     {:.2}", sol_std);
+
+        eprintln!("\nMerged non-dominated solutions: {}", merged_solutions.len());
+
+        if problem.num_objectives() >= 2 {
+            print_ascii_scatter(&merged_solutions);
+        }
+
+        eprintln!("\nOutputs:");
+        eprintln!("  Best run Pareto front: {}", output_csv);
+        eprintln!("  Merged Pareto front:   {}", merged_csv_path);
+        eprintln!("  Convergence (best run): {}", output_json);
     }
-
-    if let Some(tp_path) = true_pareto_path {
-        let tp = metrics::load_true_pareto(tp_path)?;
-        let igd_val = metrics::igd(&result.archive_members, &tp);
-        eprintln!("IGD: {:.6}", igd_val);
-    }
-
-    let sp = metrics::spacing(&result.archive_members);
-    eprintln!("Spacing: {:.6}", sp);
-
-    let feasible_count = result.archive_members.iter().filter(|s| s.is_feasible()).count();
-    eprintln!("Feasible solutions: {}/{}", feasible_count, result.archive_members.len());
-
-    if problem.num_objectives() >= 2 {
-        print_ascii_scatter(&result.archive_members);
-    }
-
-    eprintln!("\nOutputs:");
-    eprintln!("  Pareto front: {}", output_csv);
-    eprintln!("  Convergence:  {}", output_json);
 
     Ok(())
+}
+
+fn mean_std(values: &[f64]) -> (f64, f64) {
+    let n = values.len() as f64;
+    if n < 1.0 {
+        return (0.0, 0.0);
+    }
+    let mean = values.iter().sum::<f64>() / n;
+    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+    (mean, variance.sqrt())
+}
+
+fn mean_std_usize(values: &[usize]) -> (f64, f64) {
+    let floats: Vec<f64> = values.iter().map(|&v| v as f64).collect();
+    mean_std(&floats)
+}
+
+fn merge_nondominated(solutions: &[Solution]) -> Vec<Solution> {
+    let mut result: Vec<Solution> = Vec::new();
+    for sol in solutions {
+        let mut dominated = false;
+        let mut to_remove = Vec::new();
+
+        for (i, existing) in result.iter().enumerate() {
+            match sol.dominates(existing) {
+                crate::particle::Dominance::Dominates => {
+                    to_remove.push(i);
+                }
+                crate::particle::Dominance::Dominated => {
+                    dominated = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        if !dominated {
+            for &i in to_remove.iter().rev() {
+                result.remove(i);
+            }
+            result.push(sol.clone());
+        }
+    }
+    result
+}
+
+fn add_suffix_to_filename(path: &str, suffix: &str) -> String {
+    if let Some(dot_pos) = path.rfind('.') {
+        format!("{}{}{}", &path[..dot_pos], suffix, &path[dot_pos..])
+    } else {
+        format!("{}{}", path, suffix)
+    }
 }
 
 fn write_csv(solutions: &[Solution], problem: &problem::Problem, path: &str) -> Result<(), String> {

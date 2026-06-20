@@ -8,6 +8,8 @@ use rand::Rng;
 pub struct MopsoResult {
     pub archive_members: Vec<Solution>,
     pub convergence: Vec<f64>,
+    pub final_iteration: usize,
+    pub early_stopped: bool,
 }
 
 pub fn run_mopso<R: Rng>(
@@ -24,6 +26,8 @@ pub fn run_mopso<R: Rng>(
     let c2 = config.c2;
     let grid_divisions = config.grid_divisions;
     let variant = config.variant.to_lowercase();
+    let stagnation_limit = config.stagnation_limit;
+    let stagnation_threshold = config.stagnation_threshold;
 
     let mut archive = Archive::new(archive_capacity, grid_divisions);
     let mut particles: Vec<Particle> = (0..pop_size)
@@ -42,6 +46,10 @@ pub fn run_mopso<R: Rng>(
     let mut convergence: Vec<f64> = Vec::new();
     let mut no_improve_count = 0;
     let mut adaptive_w: f64 = 0.9;
+    let mut stagnation_count = 0;
+    let mut prev_metric: Option<f64> = None;
+    let mut early_stopped = false;
+    let mut final_iter = max_iter;
 
     for iter in 0..max_iter {
         let w = compute_inertia_weight(&config.inertia_weight, iter, max_iter, &variant, adaptive_w);
@@ -94,18 +102,39 @@ pub fn run_mopso<R: Rng>(
             }
         }
 
-        if let Some(hv_val) = hv {
+        let current_metric = if let Some(hv_val) = hv {
             convergence.push(hv_val);
+            hv_val
         } else {
-            convergence.push(archive.members.len() as f64);
+            let archive_len = archive.members.len() as f64;
+            convergence.push(archive_len);
+            archive_len
+        };
+
+        if let Some(prev) = prev_metric {
+            let improvement = current_metric - prev;
+            if improvement.abs() < stagnation_threshold {
+                stagnation_count += 1;
+            } else {
+                stagnation_count = 0;
+            }
         }
+        prev_metric = Some(current_metric);
 
         progress_callback(iter + 1, max_iter, archive.members.len(), hv);
+
+        if stagnation_count >= stagnation_limit {
+            early_stopped = true;
+            final_iter = iter + 1;
+            break;
+        }
     }
 
     MopsoResult {
         archive_members: archive.members,
         convergence,
+        final_iteration: final_iter,
+        early_stopped,
     }
 }
 
