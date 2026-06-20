@@ -51,3 +51,8 @@ docker-compose.override.yml
 coverage/
 htmlcov/
 .coverage
+
+
+# Added by cargo
+
+/target
