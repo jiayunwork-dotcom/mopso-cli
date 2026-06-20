@@ -16,39 +16,59 @@ pub fn hypervolume(solutions: &[Solution], reference_point: &[f64]) -> f64 {
 
     for p in &mut points {
         for k in 0..n_objs {
-            p[k] = reference_point[k] - p[k];
-            if p[k] < 0.0 {
-                p[k] = 0.0;
+            if p[k] > reference_point[k] {
+                p[k] = reference_point[k];
             }
         }
     }
 
     if n_objs == 1 {
-        return points.iter().map(|p| p[0]).fold(0.0f64, f64::max);
+        let max_val = points.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+        if max_val <= reference_point[0] {
+            return reference_point[0] - max_val;
+        }
+        return 0.0;
     }
-    if n_objs == 2 {
-        return hv_2d(&points);
+    if n_objs >= 2 {
+        return hv_2d(&points, reference_point);
     }
 
-    hv_2d(&points)
+    0.0
 }
 
-fn hv_2d(points: &[Vec<f64>]) -> f64 {
+fn hv_2d(points: &[Vec<f64>], ref_point: &[f64]) -> f64 {
     if points.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<&Vec<f64>> = points.iter().collect();
-    sorted.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
+    let r1 = ref_point[0];
+    let r2 = ref_point[1];
+
+    let mut filtered: Vec<(f64, f64)> = points.iter()
+        .map(|p| (p[0], p[1]))
+        .filter(|(f1, f2)| *f1 <= r1 + 1e-12 && *f2 <= r2 + 1e-12)
+        .collect();
+
+    if filtered.is_empty() {
+        return 0.0;
+    }
+
+    filtered.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut nd: Vec<(f64, f64)> = Vec::new();
+    for p in filtered {
+        let dominated = nd.iter().any(|&(_, y2)| y2 <= p.1 + 1e-12);
+        if !dominated {
+            nd.push(p);
+        }
+    }
 
     let mut hv = 0.0;
-    let mut prev_y = 0.0f64;
+    let mut prev_x = r1;
 
-    for i in 0..sorted.len() {
-        let x = sorted[i][0];
-        let y = sorted[i][1];
-        if x > 0.0 && y > prev_y {
-            hv += x * (y - prev_y);
-            prev_y = y;
+    for &(f1, f2) in nd.iter().rev() {
+        if f1 < prev_x {
+            hv += (prev_x - f1) * (r2 - f2);
+            prev_x = f1;
         }
     }
 
@@ -126,4 +146,41 @@ pub fn load_true_pareto(path: &str) -> Result<Vec<Vec<f64>>, String> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::particle::Solution;
+
+    fn make_sol(obj: Vec<f64>) -> Solution {
+        Solution::new(vec![0.0; 1], obj, 0.0)
+    }
+
+    #[test]
+    fn test_hypervolume_2d_ideal_zdt1() {
+        let mut sols = Vec::new();
+        for i in 0..=100 {
+            let f1 = i as f64 / 100.0;
+            let g = 1.0;
+            let f2 = g * (1.0 - (f1 / g).sqrt());
+            sols.push(make_sol(vec![f1, f2]));
+        }
+        let ref_point = &[11.0, 11.0];
+        let hv = hypervolume(&sols, ref_point);
+        assert!(hv > 119.0 && hv < 121.0);
+    }
+
+    #[test]
+    fn test_hypervolume_2d_simple() {
+        let sols = vec![
+            make_sol(vec![2.0, 3.0]),
+            make_sol(vec![3.0, 2.0]),
+            make_sol(vec![1.0, 5.0]),
+        ];
+        let ref_point = &[4.0, 6.0];
+        let hv = hypervolume(&sols, ref_point);
+        let expected = (4.0 - 1.0) * (6.0 - 5.0) + (4.0 - 2.0) * (5.0 - 3.0) + (4.0 - 3.0) * (3.0 - 2.0);
+        assert!((hv - expected).abs() < 1e-6);
+    }
 }

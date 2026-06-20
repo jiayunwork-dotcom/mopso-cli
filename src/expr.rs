@@ -11,6 +11,7 @@ pub enum Token {
     Caret,
     LParen,
     RParen,
+    Comma,
     Func(String),
 }
 
@@ -26,7 +27,7 @@ pub enum Expr {
     UnaryMinus(Box<Expr>),
     FuncCall {
         name: String,
-        arg: Box<Expr>,
+        args: Vec<Expr>,
     },
 }
 
@@ -41,7 +42,7 @@ pub enum BinOp {
 
 const ALLOWED_FUNCS: &[&str] = &[
     "sin", "cos", "tan", "exp", "log", "sqrt", "abs", "asin", "acos", "atan",
-    "ceil", "floor", "log2", "log10",
+    "ceil", "floor", "log2", "log10", "pow",
 ];
 
 fn is_allowed_func(name: &str) -> bool {
@@ -114,6 +115,7 @@ impl Tokenizer {
                 '^' => { self.advance(); tokens.push(Token::Caret); }
                 '(' => { self.advance(); tokens.push(Token::LParen); }
                 ')' => { self.advance(); tokens.push(Token::RParen); }
+                ',' => { self.advance(); tokens.push(Token::Comma); }
                 _ => return Err(format!("Unexpected character: '{}'", ch)),
             }
         }
@@ -230,12 +232,19 @@ impl Parser {
                 match self.peek() {
                     Some(Token::LParen) => {
                         self.advance();
-                        let arg = self.parse_addition()?;
+                        let mut args = Vec::new();
+                        if !matches!(self.peek(), Some(Token::RParen)) {
+                            args.push(self.parse_addition()?);
+                            while let Some(Token::Comma) = self.peek() {
+                                self.advance();
+                                args.push(self.parse_addition()?);
+                            }
+                        }
                         match self.advance() {
                             Some(Token::RParen) => {}
-                            _ => return Err(format!("Expected ')' after function argument for {}", name)),
+                            _ => return Err(format!("Expected ')' after function arguments for {}", name)),
                         }
-                        Ok(Expr::FuncCall { name, arg: Box::new(arg) })
+                        Ok(Expr::FuncCall { name, args })
                     }
                     _ => Err(format!("Expected '(' after function name {}", name)),
                 }
@@ -283,24 +292,39 @@ pub fn eval_expr(expr: &Expr, vars: &HashMap<String, f64>) -> Result<f64, String
             let v = eval_expr(inner, vars)?;
             Ok(-v)
         }
-        Expr::FuncCall { name, arg } => {
-            let v = eval_expr(arg, vars)?;
+        Expr::FuncCall { name, args } => {
             match name.as_str() {
-                "sin" => Ok(v.sin()),
-                "cos" => Ok(v.cos()),
-                "tan" => Ok(v.tan()),
-                "exp" => Ok(v.exp()),
-                "log" => Ok(v.ln()),
-                "sqrt" => { if v < 0.0 { Ok(f64::NAN) } else { Ok(v.sqrt()) } }
-                "abs" => Ok(v.abs()),
-                "asin" => Ok(v.asin()),
-                "acos" => Ok(v.acos()),
-                "atan" => Ok(v.atan()),
-                "ceil" => Ok(v.ceil()),
-                "floor" => Ok(v.floor()),
-                "log2" => Ok(v.log2()),
-                "log10" => Ok(v.log10()),
-                _ => Err(format!("Unknown function: {}", name)),
+                "pow" => {
+                    if args.len() != 2 {
+                        return Err(format!("pow() requires exactly 2 arguments, got {}", args.len()));
+                    }
+                    let base = eval_expr(&args[0], vars)?;
+                    let exp = eval_expr(&args[1], vars)?;
+                    Ok(base.powf(exp))
+                }
+                _ => {
+                    if args.len() != 1 {
+                        return Err(format!("{}() requires exactly 1 argument, got {}", name, args.len()));
+                    }
+                    let v = eval_expr(&args[0], vars)?;
+                    match name.as_str() {
+                        "sin" => Ok(v.sin()),
+                        "cos" => Ok(v.cos()),
+                        "tan" => Ok(v.tan()),
+                        "exp" => Ok(v.exp()),
+                        "log" => Ok(v.ln()),
+                        "sqrt" => { if v < 0.0 { Ok(f64::NAN) } else { Ok(v.sqrt()) } }
+                        "abs" => Ok(v.abs()),
+                        "asin" => Ok(v.asin()),
+                        "acos" => Ok(v.acos()),
+                        "atan" => Ok(v.atan()),
+                        "ceil" => Ok(v.ceil()),
+                        "floor" => Ok(v.floor()),
+                        "log2" => Ok(v.log2()),
+                        "log10" => Ok(v.log10()),
+                        _ => Err(format!("Unknown function: {}", name)),
+                    }
+                }
             }
         }
     }
@@ -308,7 +332,7 @@ pub fn eval_expr(expr: &Expr, vars: &HashMap<String, f64>) -> Result<f64, String
 
 pub struct CompiledExpr {
     ast: Expr,
-    var_names: Vec<String>,
+    var_indices: Vec<(String, usize)>,
 }
 
 impl CompiledExpr {
@@ -316,19 +340,23 @@ impl CompiledExpr {
         let ast = compile_expr(input)?;
         let mut var_names = Vec::new();
         collect_vars(&ast, &mut var_names);
+        let mut var_indices = Vec::with_capacity(var_names.len());
         for v in &var_names {
-            if !allowed_vars.contains(v) {
-                return Err(format!("Unknown variable '{}' in expression. Allowed: {:?}", v, allowed_vars));
+            match allowed_vars.iter().position(|x| x == v) {
+                Some(idx) => var_indices.push((v.clone(), idx)),
+                None => return Err(format!("Unknown variable '{}' in expression. Allowed: {:?}", v, allowed_vars)),
             }
         }
-        Ok(CompiledExpr { ast, var_names })
+        Ok(CompiledExpr { ast, var_indices })
     }
 
     pub fn eval(&self, var_values: &[f64]) -> Result<f64, String> {
         let mut vars = HashMap::new();
-        for (i, name) in self.var_names.iter().enumerate() {
-            if i < var_values.len() {
-                vars.insert(name.clone(), var_values[i]);
+        for (name, idx) in &self.var_indices {
+            if *idx < var_values.len() {
+                vars.insert(name.clone(), var_values[*idx]);
+            } else {
+                return Err(format!("Variable '{}' index {} out of bounds (values len: {})", name, idx, var_values.len()));
             }
         }
         eval_expr(&self.ast, &vars)
@@ -347,7 +375,11 @@ fn collect_vars(expr: &Expr, vars: &mut Vec<String>) {
             collect_vars(right, vars);
         }
         Expr::UnaryMinus(inner) => collect_vars(inner, vars),
-        Expr::FuncCall { arg, .. } => collect_vars(arg, vars),
+        Expr::FuncCall { args, .. } => {
+            for a in args {
+                collect_vars(a, vars);
+            }
+        }
         _ => {}
     }
 }
@@ -408,4 +440,24 @@ mod tests {
         let result = tokenizer.tokenize();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_variable_order_independence() {
+        let allowed = vec!["x".to_string(), "y".to_string()];
+        let expr = CompiledExpr::new("y*y + x*x", &allowed).unwrap();
+        let values = vec![3.0, 4.0];
+        let result = expr.eval(&values).unwrap();
+        assert!((result - 25.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pow_function() {
+        let allowed = vec!["x".to_string(), "y".to_string()];
+        let expr = CompiledExpr::new("pow(x, 3) + pow(y, 2)", &allowed).unwrap();
+        let values = vec![2.0, 3.0];
+        let result = expr.eval(&values).unwrap();
+        assert!((result - (8.0 + 9.0)).abs() < 1e-10);
+        assert!((result - 17.0).abs() < 1e-10);
+    }
 }
+
