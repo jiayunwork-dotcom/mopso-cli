@@ -30,6 +30,7 @@ fn main() {
         variant,
         stagnation_limit,
         stagnation_threshold,
+        configs,
         seed,
     }) = cli.command
     {
@@ -49,6 +50,7 @@ fn main() {
             variant.as_deref(),
             stagnation_limit,
             stagnation_threshold,
+            configs.as_deref(),
             seed,
         ) {
             eprintln!("Error: {}", e);

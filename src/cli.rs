@@ -123,6 +123,9 @@ pub enum Commands {
         #[arg(long, help = "Stagnation threshold for early stopping")]
         stagnation_threshold: Option<f64>,
 
+        #[arg(long, help = "Comma-separated TOML config file paths for config comparison mode")]
+        configs: Option<String>,
+
         #[arg(long, help = "Random seed for reproducibility")]
         seed: Option<u64>,
     },
