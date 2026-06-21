@@ -103,8 +103,11 @@ pub fn run_benchmark(
         let prob = match load_result {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[{}/{}] {} - FAILED: {}", completed + 1, total_runs, prob_name, e);
-                completed += num_runs;
+                for skipped in 0..num_runs {
+                    completed += 1;
+                    eprintln!("[{}/{}] {} - SKIPPED (run {}/{}): {}",
+                        completed, total_runs, prob_name, skipped + 1, num_runs, e);
+                }
                 benchmarks.push(ProblemBenchmark {
                     name: prob_name.clone(),
                     runs: Vec::new(),
@@ -261,7 +264,11 @@ fn generate_report(
                 .map(|v| format!("{:.6}", v))
                 .collect::<Vec<_>>()
                 .join(",");
-            md.push_str(&format!("**Best run convergence (run {})**:\n\n", best_run_idx + 1));
+            if ref_point.is_some() {
+                md.push_str(&format!("**Best run convergence (HV, run {})**:\n\n", best_run_idx + 1));
+            } else {
+                md.push_str(&format!("**Best run convergence (reference point not provided; data is archive size per generation, not HV; run {})**:\n\n", best_run_idx + 1));
+            }
             md.push_str(&format!("```\n{}\n```\n\n", convergence_str));
         }
     }
@@ -284,6 +291,7 @@ fn mean_std(values: &[f64]) -> (f64, f64) {
         return (0.0, 0.0);
     }
     let mean = values.iter().sum::<f64>() / n;
-    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+    let denom = if n > 1.0 { n - 1.0 } else { 1.0 };
+    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / denom;
     (mean, variance.sqrt())
 }
