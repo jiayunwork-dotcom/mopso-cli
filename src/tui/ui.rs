@@ -204,34 +204,87 @@ fn draw_status_panel(f: &mut Frame<'_>, app: &App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    let is_compare = app.is_compare_run || !app.compare_results.is_empty();
+    let is_compare = !app.compare_groups.is_empty();
+
+    let status_text = if app.is_running {
+        if is_compare {
+            format!("Compare Running ({}/{})", app.compare_current_group + 1, app.compare_groups.len())
+        } else {
+            "Running".to_string()
+        }
+    } else if app.early_stopped {
+        "Early Stopped".to_string()
+    } else if app.current_generation > 0 {
+        "Completed".to_string()
+    } else {
+        "Ready".to_string()
+    };
+
+    let status_color = if app.is_running {
+        Color::Green
+    } else if app.early_stopped {
+        Color::Yellow
+    } else if app.current_generation > 0 {
+        Color::Cyan
+    } else {
+        Color::Gray
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("Status: ", Style::default().fg(Color::Gray)),
+        Span::styled(status_text, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+    ]));
+
+    lines.push(Line::from(vec![Span::raw("")]));
+
+    lines.push(Line::from(vec![
+        Span::styled("Generation: ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("{} / {}", app.current_generation, app.max_iterations),
+            Style::default().fg(Color::White),
+        ),
+    ]));
+
+    lines.push(Line::from(vec![
+        Span::styled("Archive Size: ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("{} / {}", app.archive_count, app.archive_size),
+            Style::default().fg(Color::White),
+        ),
+    ]));
+
+    let hv_str = match app.current_hv {
+        Some(hv) => format!("{:.6}", hv),
+        None => "N/A".to_string(),
+    };
+    lines.push(Line::from(vec![
+        Span::styled("HV Value: ", Style::default().fg(Color::Gray)),
+        Span::styled(hv_str, Style::default().fg(Color::White)),
+    ]));
+
+    lines.push(Line::from(vec![
+        Span::styled("Elapsed Time: ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("{:.2}s", app.elapsed_time),
+            Style::default().fg(Color::White),
+        ),
+    ]));
+
+    lines.push(Line::from(vec![
+        Span::styled("Early Stopped: ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            if app.early_stopped { "Yes" } else { "No" },
+            Style::default().fg(if app.early_stopped { Color::Yellow } else { Color::White }),
+        ),
+    ]));
 
     if is_compare {
-        let status_text = if app.is_running {
-            format!("Compare Running ({}/{})", app.compare_current_group + 1, app.compare_groups.len())
-        } else if app.current_generation > 0 {
-            "Compare Completed".to_string()
-        } else {
-            "Ready (Compare Mode)".to_string()
-        };
-
-        let status_color = if app.is_running {
-            Color::Green
-        } else if app.current_generation > 0 {
-            Color::Cyan
-        } else {
-            Color::Gray
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled("Status: ", Style::default().fg(Color::Gray)),
-            Span::styled(status_text, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-        ]));
-
         lines.push(Line::from(vec![Span::raw("")]));
         lines.push(Line::from(vec![
-            Span::styled("── Group Progress ──", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("── Compare Summary ──", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         ]));
+
+        let has_any_result = app.compare_results.iter().any(|r| r.is_some());
 
         if app.is_running && !app.compare_progress.is_empty() {
             for (i, prog) in app.compare_progress.iter().enumerate() {
@@ -254,12 +307,14 @@ fn draw_status_panel(f: &mut Frame<'_>, app: &App, area: Rect) {
                     ),
                 ]));
             }
-        } else if !app.compare_results.is_empty() {
+        } else if has_any_result {
             let mut best_idx = 0usize;
             let mut best_hv = f64::NEG_INFINITY;
+            let mut has_hv = false;
             for (i, res) in app.compare_results.iter().enumerate() {
                 if let Some(r) = res {
                     if let Some(hv) = r.final_hv {
+                        has_hv = true;
                         if hv > best_hv {
                             best_hv = hv;
                             best_idx = i;
@@ -273,104 +328,49 @@ fn draw_status_panel(f: &mut Frame<'_>, app: &App, area: Rect) {
                     let marker = App::compare_group_marker(i);
                     let color = App::compare_group_color(i);
                     let hv_str = r.final_hv
-                        .map(|h| format!("{:.6}", h))
+                        .map(|h| format!("{:.4}", h))
                         .unwrap_or_else(|| "N/A".to_string());
-                    let is_best = r.final_hv.is_some() && i == best_idx;
-                    let star = if is_best { " ★" } else { "" };
+                    let is_best = has_hv && r.final_hv.is_some() && i == best_idx;
+                    let star = if is_best { " *" } else { "" };
+
+                    let line_style = if is_best {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
 
                     lines.push(Line::from(vec![
-                        Span::styled(format!(" [{}] ", marker), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                        Span::styled("  ", Style::default()),
+                        Span::styled(format!("[{}]", marker), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ", Style::default()),
                         Span::styled(
-                            format!("G{}: gen={} arch={} HV={} ({:.2}s){}",
-                                i + 1, r.final_iteration, r.archive_members.len(), hv_str, r.elapsed_time, star
-                            ),
-                            Style::default().fg(if is_best { Color::Yellow } else { Color::White }).add_modifier(if is_best { Modifier::BOLD } else { Modifier::empty() }),
+                            format!("G{}: HV={} ({:.2}s){}", i + 1, hv_str, r.elapsed_time, star),
+                            line_style,
                         ),
                     ]));
-                } else if app.is_running {
+                } else {
                     let marker = App::compare_group_marker(i);
                     let color = App::compare_group_color(i);
                     lines.push(Line::from(vec![
-                        Span::styled(format!(" [{}] ", marker), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                        Span::styled("  ", Style::default()),
+                        Span::styled(format!("[{}]", marker), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ", Style::default()),
                         Span::styled(format!("G{}: pending...", i + 1), Style::default().fg(Color::DarkGray)),
                     ]));
                 }
             }
+        } else {
+            for (i, _) in app.compare_groups.iter().enumerate() {
+                let marker = App::compare_group_marker(i);
+                let color = App::compare_group_color(i);
+                lines.push(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(format!("[{}]", marker), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                    Span::styled(" ", Style::default()),
+                    Span::styled(format!("G{}: ready", i + 1), Style::default().fg(Color::DarkGray)),
+                ]));
+            }
         }
-
-        lines.push(Line::from(vec![Span::raw("")]));
-        lines.push(Line::from(vec![
-            Span::styled("Total Elapsed: ", Style::default().fg(Color::Gray)),
-            Span::styled(format!("{:.2}s", app.elapsed_time), Style::default().fg(Color::White)),
-        ]));
-    } else {
-        let status_text = if app.is_running {
-            "Running"
-        } else if app.early_stopped {
-            "Early Stopped"
-        } else if app.current_generation > 0 {
-            "Completed"
-        } else {
-            "Ready"
-        };
-
-        let status_color = if app.is_running {
-            Color::Green
-        } else if app.early_stopped {
-            Color::Yellow
-        } else if app.current_generation > 0 {
-            Color::Cyan
-        } else {
-            Color::Gray
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled("Status: ", Style::default().fg(Color::Gray)),
-            Span::styled(status_text, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-        ]));
-
-        lines.push(Line::from(vec![Span::raw("")]));
-
-        lines.push(Line::from(vec![
-            Span::styled("Generation: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                format!("{} / {}", app.current_generation, app.max_iterations),
-                Style::default().fg(Color::White),
-            ),
-        ]));
-
-        lines.push(Line::from(vec![
-            Span::styled("Archive Size: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                format!("{} / {}", app.archive_count, app.archive_size),
-                Style::default().fg(Color::White),
-            ),
-        ]));
-
-        let hv_str = match app.current_hv {
-            Some(hv) => format!("{:.6}", hv),
-            None => "N/A".to_string(),
-        };
-        lines.push(Line::from(vec![
-            Span::styled("HV Value: ", Style::default().fg(Color::Gray)),
-            Span::styled(hv_str, Style::default().fg(Color::White)),
-        ]));
-
-        lines.push(Line::from(vec![
-            Span::styled("Elapsed Time: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                format!("{:.2}s", app.elapsed_time),
-                Style::default().fg(Color::White),
-            ),
-        ]));
-
-        lines.push(Line::from(vec![
-            Span::styled("Early Stopped: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                if app.early_stopped { "Yes" } else { "No" },
-                Style::default().fg(if app.early_stopped { Color::Yellow } else { Color::White }),
-            ),
-        ]));
     }
 
     lines.push(Line::from(vec![Span::raw("")]));
@@ -384,9 +384,9 @@ fn draw_status_panel(f: &mut Frame<'_>, app: &App, area: Rect) {
         ]));
     } else {
         let hint = if is_compare {
-            format!("○ Press R to run {} groups | C: Add group | D: Del group", app.compare_groups.len())
+            format!("○ Press R to run {} groups | C: Add | D: Del", app.compare_groups.len())
         } else {
-            "○ Press R to start optimization | C: Add compare group".to_string()
+            "○ Press R to start | C: Add compare group".to_string()
         };
         lines.push(Line::from(vec![
             Span::styled(hint, Style::default().fg(Color::DarkGray)),
@@ -900,31 +900,33 @@ fn draw_compare_group_dialog(f: &mut Frame<'_>, app: &App) {
 
     let fields = app.get_compare_fields();
     let mut lines: Vec<Line> = Vec::new();
+    let inner_width = inner.width.max(10) as usize;
 
     for (i, field) in fields.iter().enumerate() {
         let is_selected = app.compare_dialog_field == i;
 
-        let label_style = if is_selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        if is_selected {
+            let prefix = "▶ ";
+            let label = format!("{:<22}", field.label);
+            let value = field.value.clone();
+            let content = format!("{}{}{}", prefix, label, value);
+            let pad_len = inner_width.saturating_sub(content.chars().count()).max(0);
+            let padded = format!("{}{}", content, " ".repeat(pad_len));
+
+            lines.push(Line::from(vec![
+                Span::styled(
+                    padded,
+                    Style::default().fg(Color::Yellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                ),
+            ]));
         } else {
-            Style::default().fg(Color::Gray)
-        };
-
-        let value_style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let display_value = field.value.clone();
-
-        let prefix = if is_selected { "▶ " } else { "  " };
-
-        lines.push(Line::from(vec![
-            Span::styled(prefix, label_style),
-            Span::styled(format!("{:<22}", field.label), label_style),
-            Span::styled(display_value, value_style),
-        ]));
+            let prefix = "  ";
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::Gray)),
+                Span::styled(format!("{:<22}", field.label), Style::default().fg(Color::Gray)),
+                Span::styled(field.value.clone(), Style::default().fg(Color::White)),
+            ]));
+        }
     }
 
     let fields_paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });

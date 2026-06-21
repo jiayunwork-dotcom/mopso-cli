@@ -782,9 +782,45 @@ fn chrono_local_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = dur.as_secs();
-    let years_since_1970 = secs / 31536000;
-    let _ = years_since_1970;
-    format!("{}", secs)
+
+    let days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut days = secs / 86400;
+    let mut year = 1970;
+
+    loop {
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if is_leap { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let mut month = 0;
+    for (i, &dpm) in days_per_month.iter().enumerate() {
+        let mut days_in_month = dpm;
+        if i == 1 && is_leap {
+            days_in_month += 1;
+        }
+        if days < days_in_month {
+            month = i;
+            break;
+        }
+        days -= days_in_month;
+        month = i + 1;
+    }
+
+    let day = days + 1;
+    let hour = (secs / 3600) % 24;
+    let minute = (secs / 60) % 60;
+    let second = secs % 60;
+
+    format!(
+        "{:04}{:02}{:02}_{:02}{:02}{:02}",
+        year, month + 1, day, hour, minute, second
+    )
 }
 
 fn export_results(app: &App) -> Result<(), String> {
