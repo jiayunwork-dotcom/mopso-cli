@@ -3,7 +3,7 @@ use crate::metrics;
 use crate::mopso;
 use crate::particle::Solution;
 use crate::problem;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rand::SeedableRng;
 use std::io::Write;
 
@@ -69,6 +69,63 @@ pub struct Cli {
 
     #[arg(long, help = "Launch interactive TUI mode")]
     pub tui: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    #[command(about = "Run benchmark on built-in problem set and generate comparison report")]
+    Benchmark {
+        #[arg(long, help = "Comma-separated list of built-in problem names")]
+        problems: String,
+
+        #[arg(long, help = "Number of independent runs per problem", default_value = "3")]
+        runs: usize,
+
+        #[arg(long, help = "Output markdown report file path", default_value = "benchmark_report.md")]
+        output: String,
+
+        #[arg(long, help = "Reference point for hypervolume (comma-separated)")]
+        reference_point: Option<String>,
+
+        #[arg(short, long, help = "Path to TOML configuration file")]
+        config: Option<String>,
+
+        #[arg(long, help = "Population size")]
+        population_size: Option<usize>,
+
+        #[arg(long, help = "Maximum iterations")]
+        max_iterations: Option<usize>,
+
+        #[arg(long, help = "Archive capacity")]
+        archive_size: Option<usize>,
+
+        #[arg(long, help = "Inertia weight (fixed value)")]
+        inertia_weight: Option<f64>,
+
+        #[arg(long, help = "Cognitive learning factor")]
+        c1: Option<f64>,
+
+        #[arg(long, help = "Social learning factor")]
+        c2: Option<f64>,
+
+        #[arg(long, help = "Grid divisions for leader selection")]
+        grid_divisions: Option<usize>,
+
+        #[arg(long, help = "Algorithm variant: standard or adaptive")]
+        variant: Option<String>,
+
+        #[arg(long, help = "Stagnation limit for early stopping (generations)")]
+        stagnation_limit: Option<usize>,
+
+        #[arg(long, help = "Stagnation threshold for early stopping")]
+        stagnation_threshold: Option<f64>,
+
+        #[arg(long, help = "Random seed for reproducibility")]
+        seed: Option<u64>,
+    },
 }
 
 struct RunResult {
