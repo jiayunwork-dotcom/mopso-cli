@@ -1,5 +1,6 @@
 use crate::config::AlgorithmConfig;
 use crate::particle::Solution;
+use ratatui::style::Color;
 use ratatui::text::Line;
 use std::cell::RefCell;
 use std::time::Instant;
@@ -18,6 +19,7 @@ pub enum AppMode {
     Editing,
     ExportDialog,
     Stopping,
+    CompareGroupDialog,
 }
 
 #[derive(Debug, Clone)]
@@ -35,12 +37,34 @@ pub enum FieldType {
     String,
 }
 
+#[derive(Debug, Clone)]
+pub struct CompareParams {
+    pub population_size: usize,
+    pub max_iterations: usize,
+    pub archive_size: usize,
+    pub inertia_weight: f64,
+    pub c1: f64,
+    pub c2: f64,
+    pub variant: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompareGroupResult {
+    pub archive_members: Vec<Solution>,
+    pub convergence: Vec<f64>,
+    pub final_iteration: usize,
+    pub early_stopped: bool,
+    pub final_hv: Option<f64>,
+    pub elapsed_time: f64,
+}
+
 pub struct App {
     pub current_panel: Panel,
     pub mode: AppMode,
     pub selected_field: usize,
     pub edit_buffer: String,
     pub cursor_pos: usize,
+    pub editing_from_compare_dialog: bool,
 
     pub population_size: usize,
     pub max_iterations: usize,
@@ -64,7 +88,16 @@ pub struct App {
     pub archive_members: Vec<Solution>,
     pub convergence: Vec<f64>,
     pub reference_point: Option<Vec<f64>>,
-    
+
+    pub compare_groups: Vec<CompareParams>,
+    pub selected_compare_group: usize,
+    pub compare_dialog_params: CompareParams,
+    pub compare_dialog_field: usize,
+    pub is_compare_run: bool,
+    pub compare_current_group: usize,
+    pub compare_results: Vec<Option<CompareGroupResult>>,
+    pub compare_progress: Vec<(usize, usize, Option<f64>)>,
+
     pub scatter_cache: RefCell<Option<(u64, usize, usize, Vec<Line<'static>>)>>,
     pub convergence_cache: RefCell<Option<(u64, usize, usize, Vec<Line<'static>>)>>,
     pub archive_version: u64,
@@ -95,6 +128,7 @@ impl App {
             selected_field: 0,
             edit_buffer: String::new(),
             cursor_pos: 0,
+            editing_from_compare_dialog: false,
 
             population_size: default_config.population_size,
             max_iterations: default_config.max_iterations,
@@ -102,7 +136,7 @@ impl App {
             inertia_weight: w,
             c1: default_config.c1,
             c2: default_config.c2,
-            variant: default_config.variant,
+            variant: default_config.variant.clone(),
             stagnation_limit: default_config.stagnation_limit,
             stagnation_threshold: default_config.stagnation_threshold,
             reference_point_str: String::new(),
@@ -118,7 +152,24 @@ impl App {
             archive_members: Vec::new(),
             convergence: Vec::new(),
             reference_point: None,
-            
+
+            compare_groups: Vec::new(),
+            selected_compare_group: 0,
+            compare_dialog_params: CompareParams {
+                population_size: default_config.population_size,
+                max_iterations: default_config.max_iterations,
+                archive_size: default_config.archive_size,
+                inertia_weight: w,
+                c1: default_config.c1,
+                c2: default_config.c2,
+                variant: default_config.variant.clone(),
+            },
+            compare_dialog_field: 0,
+            is_compare_run: false,
+            compare_current_group: 0,
+            compare_results: Vec::new(),
+            compare_progress: Vec::new(),
+
             scatter_cache: RefCell::new(None),
             convergence_cache: RefCell::new(None),
             archive_version: 0,
@@ -133,7 +184,7 @@ impl App {
             export_json_path: String::from("convergence.json"),
             export_field_idx: 0,
 
-            status_message: String::from("按 R 开始运行 | Tab 切换面板 | P 切换问题 | E 导出 | Q 退出"),
+            status_message: String::from("按 R 开始运行 | C 添加对比组 | Tab 切换面板 | P 切换问题 | E 导出 | Q 退出"),
         }
     }
 
@@ -240,6 +291,7 @@ impl App {
                 self.edit_buffer = value;
             }
             self.cursor_pos = self.edit_buffer.len();
+            self.editing_from_compare_dialog = false;
             self.mode = AppMode::Editing;
         }
     }
@@ -438,6 +490,10 @@ impl App {
         self.current_generation = 0;
         self.archive_count = 0;
         self.early_stopped = false;
+        self.is_compare_run = false;
+        self.compare_results.clear();
+        self.compare_progress.clear();
+        self.compare_current_group = 0;
         self.archive_version = self.archive_version.wrapping_add(1);
         self.convergence_version = self.convergence_version.wrapping_add(1);
         self.status_message = format!(
@@ -451,7 +507,8 @@ impl App {
     }
 
     pub fn start_export_dialog(&mut self) {
-        if self.archive_members.is_empty() {
+        let has_compare_results = self.compare_results.iter().any(|r| r.is_some());
+        if self.archive_members.is_empty() && !has_compare_results {
             self.status_message = String::from("No results to export. Run optimization first.");
             return;
         }
@@ -493,6 +550,240 @@ impl App {
             variant: self.variant.clone(),
             stagnation_limit: self.stagnation_limit,
             stagnation_threshold: self.stagnation_threshold,
+        }
+    }
+
+    pub fn compare_params_to_config(&self, cp: &CompareParams) -> AlgorithmConfig {
+        AlgorithmConfig {
+            population_size: cp.population_size,
+            max_iterations: cp.max_iterations,
+            archive_size: cp.archive_size,
+            inertia_weight: Some(crate::config::InertiaWeightConfig::Fixed(cp.inertia_weight)),
+            c1: cp.c1,
+            c2: cp.c2,
+            grid_divisions: 20,
+            variant: cp.variant.clone(),
+            stagnation_limit: self.stagnation_limit,
+            stagnation_threshold: self.stagnation_threshold,
+        }
+    }
+
+    pub fn current_params_as_compare(&self) -> CompareParams {
+        CompareParams {
+            population_size: self.population_size,
+            max_iterations: self.max_iterations,
+            archive_size: self.archive_size,
+            inertia_weight: self.inertia_weight,
+            c1: self.c1,
+            c2: self.c2,
+            variant: self.variant.clone(),
+        }
+    }
+
+    pub fn get_compare_fields(&self) -> Vec<ParameterField> {
+        vec![
+            ParameterField {
+                label: String::from("Population Size"),
+                value: self.compare_dialog_params.population_size.to_string(),
+                field_type: FieldType::Usize,
+            },
+            ParameterField {
+                label: String::from("Max Iterations"),
+                value: self.compare_dialog_params.max_iterations.to_string(),
+                field_type: FieldType::Usize,
+            },
+            ParameterField {
+                label: String::from("Archive Size"),
+                value: self.compare_dialog_params.archive_size.to_string(),
+                field_type: FieldType::Usize,
+            },
+            ParameterField {
+                label: String::from("Inertia Weight"),
+                value: format!("{:.4}", self.compare_dialog_params.inertia_weight),
+                field_type: FieldType::Float,
+            },
+            ParameterField {
+                label: String::from("C1 (Cognitive)"),
+                value: format!("{:.4}", self.compare_dialog_params.c1),
+                field_type: FieldType::Float,
+            },
+            ParameterField {
+                label: String::from("C2 (Social)"),
+                value: format!("{:.4}", self.compare_dialog_params.c2),
+                field_type: FieldType::Float,
+            },
+            ParameterField {
+                label: String::from("Variant"),
+                value: self.compare_dialog_params.variant.clone(),
+                field_type: FieldType::String,
+            },
+        ]
+    }
+
+    pub fn start_compare_dialog(&mut self) {
+        if self.is_running {
+            return;
+        }
+        if self.compare_groups.len() >= 4 {
+            self.status_message = String::from("Maximum 4 compare groups allowed");
+            return;
+        }
+        self.compare_dialog_params = self.current_params_as_compare();
+        self.compare_dialog_field = 0;
+        self.mode = AppMode::CompareGroupDialog;
+    }
+
+    pub fn cancel_compare_dialog(&mut self) {
+        self.mode = AppMode::Normal;
+        self.edit_buffer.clear();
+        self.cursor_pos = 0;
+    }
+
+    pub fn confirm_compare_dialog(&mut self) {
+        if self.compare_groups.len() >= 4 {
+            self.status_message = String::from("Maximum 4 compare groups allowed");
+            self.mode = AppMode::Normal;
+            return;
+        }
+        self.compare_groups.push(self.compare_dialog_params.clone());
+        self.selected_compare_group = self.compare_groups.len() - 1;
+        self.status_message = format!(
+            "Added compare group {} (total: {})",
+            self.compare_groups.len(),
+            self.compare_groups.len()
+        );
+        self.mode = AppMode::Normal;
+    }
+
+    pub fn delete_selected_compare_group(&mut self) {
+        if self.is_running {
+            return;
+        }
+        if self.compare_groups.is_empty() {
+            return;
+        }
+        if self.selected_compare_group < self.compare_groups.len() {
+            self.compare_groups.remove(self.selected_compare_group);
+            if self.selected_compare_group >= self.compare_groups.len() && !self.compare_groups.is_empty() {
+                self.selected_compare_group = self.compare_groups.len() - 1;
+            }
+            self.status_message = format!(
+                "Deleted compare group. Remaining: {}",
+                self.compare_groups.len()
+            );
+        }
+    }
+
+    pub fn next_compare_dialog_field(&mut self) {
+        let fields = self.get_compare_fields();
+        if self.compare_dialog_field < fields.len() - 1 {
+            self.compare_dialog_field += 1;
+        }
+    }
+
+    pub fn prev_compare_dialog_field(&mut self) {
+        if self.compare_dialog_field > 0 {
+            self.compare_dialog_field -= 1;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn start_editing_compare_dialog(&mut self) {
+        let fields = self.get_compare_fields();
+        if self.compare_dialog_field < fields.len() {
+            self.edit_buffer = fields[self.compare_dialog_field].value.clone();
+            self.cursor_pos = self.edit_buffer.len();
+            self.editing_from_compare_dialog = true;
+            self.mode = AppMode::Editing;
+        }
+    }
+
+    pub fn finish_editing_compare_dialog(&mut self) {
+        if self.mode != AppMode::Editing {
+            return;
+        }
+        let buffer = self.edit_buffer.clone();
+        match self.compare_dialog_field {
+            0 => {
+                if let Ok(v) = buffer.parse::<usize>() {
+                    if v > 0 {
+                        self.compare_dialog_params.population_size = v;
+                    }
+                }
+            }
+            1 => {
+                if let Ok(v) = buffer.parse::<usize>() {
+                    if v > 0 {
+                        self.compare_dialog_params.max_iterations = v;
+                    }
+                }
+            }
+            2 => {
+                if let Ok(v) = buffer.parse::<usize>() {
+                    if v > 0 {
+                        self.compare_dialog_params.archive_size = v;
+                    }
+                }
+            }
+            3 => {
+                if let Ok(v) = buffer.parse::<f64>() {
+                    self.compare_dialog_params.inertia_weight = v;
+                }
+            }
+            4 => {
+                if let Ok(v) = buffer.parse::<f64>() {
+                    self.compare_dialog_params.c1 = v;
+                }
+            }
+            5 => {
+                if let Ok(v) = buffer.parse::<f64>() {
+                    self.compare_dialog_params.c2 = v;
+                }
+            }
+            6 => {
+                let v = buffer.to_lowercase();
+                if v == "standard" || v == "adaptive" {
+                    self.compare_dialog_params.variant = v;
+                }
+            }
+            _ => {}
+        }
+        self.mode = AppMode::CompareGroupDialog;
+        self.edit_buffer.clear();
+        self.cursor_pos = 0;
+    }
+
+    pub fn next_compare_group_selection(&mut self) {
+        if self.compare_groups.is_empty() {
+            return;
+        }
+        if self.selected_compare_group < self.compare_groups.len() - 1 {
+            self.selected_compare_group += 1;
+        }
+    }
+
+    pub fn prev_compare_group_selection(&mut self) {
+        if self.selected_compare_group > 0 {
+            self.selected_compare_group -= 1;
+        }
+    }
+
+    pub fn compare_group_marker(idx: usize) -> char {
+        match idx % 4 {
+            0 => 'x',
+            1 => 'o',
+            2 => '+',
+            _ => '*',
+        }
+    }
+
+    pub fn compare_group_color(idx: usize) -> Color {
+        use ratatui::style::Color;
+        match idx % 4 {
+            0 => Color::Green,
+            1 => Color::Yellow,
+            2 => Color::Magenta,
+            _ => Color::Cyan,
         }
     }
 }
