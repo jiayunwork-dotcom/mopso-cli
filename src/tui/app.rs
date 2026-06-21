@@ -258,45 +258,81 @@ impl App {
         let buffer = self.edit_buffer.clone();
         match self.selected_field {
             0 => {
-                if let Ok(v) = buffer.parse::<usize>() {
-                    if v > 0 {
+                match buffer.parse::<usize>() {
+                    Ok(v) if v > 0 => {
                         self.population_size = v;
+                        self.status_message = String::from("Parameter updated");
+                    }
+                    Ok(_) => {
+                        self.status_message = String::from("Population size must be > 0");
+                    }
+                    Err(_) => {
+                        self.status_message = format!("Invalid population size: '{}'. Must be a positive integer.", buffer);
                     }
                 }
             }
             1 => {
-                if let Ok(v) = buffer.parse::<usize>() {
-                    if v > 0 {
+                match buffer.parse::<usize>() {
+                    Ok(v) if v > 0 => {
                         self.max_iterations = v;
+                        self.status_message = String::from("Parameter updated");
+                    }
+                    Ok(_) => {
+                        self.status_message = String::from("Max iterations must be > 0");
+                    }
+                    Err(_) => {
+                        self.status_message = format!("Invalid max iterations: '{}'. Must be a positive integer.", buffer);
                     }
                 }
             }
             2 => {
-                if let Ok(v) = buffer.parse::<usize>() {
-                    if v > 0 {
+                match buffer.parse::<usize>() {
+                    Ok(v) if v > 0 => {
                         self.archive_size = v;
+                        self.status_message = String::from("Parameter updated");
+                    }
+                    Ok(_) => {
+                        self.status_message = String::from("Archive size must be > 0");
+                    }
+                    Err(_) => {
+                        self.status_message = format!("Invalid archive size: '{}'. Must be a positive integer.", buffer);
                     }
                 }
             }
             3 => {
-                if let Ok(v) = buffer.parse::<f64>() {
-                    self.inertia_weight = v;
+                match buffer.parse::<f64>() {
+                    Ok(v) => {
+                        self.inertia_weight = v;
+                        self.status_message = String::from("Parameter updated");
+                    }
+                    Err(_) => {
+                        self.status_message = format!("Invalid inertia weight: '{}'. Must be a number.", buffer);
+                    }
                 }
             }
             4 => {
                 if let Ok(v) = buffer.parse::<f64>() {
                     self.c1 = v;
+                    self.status_message = String::from("Parameter updated");
+                } else {
+                    self.status_message = format!("Invalid value for C1: '{}'. Must be a number.", buffer);
                 }
             }
             5 => {
                 if let Ok(v) = buffer.parse::<f64>() {
                     self.c2 = v;
+                    self.status_message = String::from("Parameter updated");
+                } else {
+                    self.status_message = format!("Invalid value for C2: '{}'. Must be a number.", buffer);
                 }
             }
             6 => {
                 let v = buffer.to_lowercase();
                 if v == "standard" || v == "adaptive" {
                     self.variant = v;
+                    self.status_message = String::from("Parameter updated");
+                } else {
+                    self.status_message = format!("Invalid variant: '{}'. Must be 'standard' or 'adaptive'.", buffer);
                 }
             }
             7 => {
@@ -304,15 +340,27 @@ impl App {
                 if trimmed.is_empty() || trimmed == "(empty = no HV)" {
                     self.reference_point_str = String::new();
                     self.reference_point = None;
+                    self.status_message = String::from("Reference point cleared (HV disabled)");
                 } else {
                     let parsed: Result<Vec<f64>, _> = trimmed
                         .split(',')
                         .map(|s| s.trim().parse::<f64>())
                         .collect();
-                    if let Ok(rp) = parsed {
-                        if !rp.is_empty() {
-                            self.reference_point_str = trimmed.to_string();
-                            self.reference_point = Some(rp);
+                    match parsed {
+                        Ok(rp) => {
+                            if !rp.is_empty() {
+                                self.reference_point_str = trimmed.to_string();
+                                self.reference_point = Some(rp);
+                                self.status_message = format!("Reference point set to [{}]", trimmed);
+                            } else {
+                                self.status_message = String::from("Reference point cannot be empty");
+                            }
+                        }
+                        Err(_) => {
+                            self.status_message = format!(
+                                "Invalid reference point: '{}'. Use comma-separated numbers (e.g. '11.0,11.0')",
+                                trimmed
+                            );
                         }
                     }
                 }
@@ -320,11 +368,17 @@ impl App {
             8 => {
                 if let Ok(v) = buffer.parse::<usize>() {
                     self.stagnation_limit = v;
+                    self.status_message = String::from("Parameter updated");
+                } else {
+                    self.status_message = format!("Invalid stagnation limit: '{}'. Must be a positive integer.", buffer);
                 }
             }
             9 => {
                 if let Ok(v) = buffer.parse::<f64>() {
                     self.stagnation_threshold = v;
+                    self.status_message = String::from("Parameter updated");
+                } else {
+                    self.status_message = format!("Invalid stagnation threshold: '{}'. Must be a number.", buffer);
                 }
             }
             _ => {}

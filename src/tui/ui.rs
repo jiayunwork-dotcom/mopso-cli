@@ -341,38 +341,52 @@ fn render_scatter_plot(app: &App, width: usize, height: usize) -> Vec<Line<'stat
         return lines;
     }
 
-    let f1_min = feasible.iter().map(|s| s.objectives[0]).fold(f64::INFINITY, f64::min);
-    let f1_max = feasible.iter().map(|s| s.objectives[0]).fold(f64::NEG_INFINITY, f64::max);
-    let f2_min = feasible.iter().map(|s| s.objectives[1]).fold(f64::INFINITY, f64::min);
-    let f2_max = feasible.iter().map(|s| s.objectives[1]).fold(f64::NEG_INFINITY, f64::max);
+    let mut f1_min = f64::INFINITY;
+    let mut f1_max = f64::NEG_INFINITY;
+    let mut f2_min = f64::INFINITY;
+    let mut f2_max = f64::NEG_INFINITY;
+    for s in &feasible {
+        let f1 = s.objectives[0];
+        let f2 = s.objectives[1];
+        if f1 < f1_min { f1_min = f1; }
+        if f1 > f1_max { f1_max = f1; }
+        if f2 < f2_min { f2_min = f2; }
+        if f2 > f2_max { f2_max = f2; }
+    }
 
     let f1_range = (f1_max - f1_min).max(1e-12);
     let f2_range = (f2_max - f2_min).max(1e-12);
 
+    let f1_scale = (plot_width - 1) as f64 / f1_range;
+    let f2_scale = (plot_height - 1) as f64 / f2_range;
+
     let mut grid = vec![vec![0u32; plot_width]; plot_height];
 
     for s in &feasible {
-        let col = ((s.objectives[0] - f1_min) / f1_range * (plot_width - 1) as f64).round() as usize;
-        let row = ((s.objectives[1] - f2_min) / f2_range * (plot_height - 1) as f64).round() as usize;
+        let col = ((s.objectives[0] - f1_min) * f1_scale).round() as usize;
+        let row = ((s.objectives[1] - f2_min) * f2_scale).round() as usize;
         let col = col.min(plot_width - 1);
         let row = row.min(plot_height - 1);
         let grid_row = plot_height - 1 - row;
         grid[grid_row][col] += 1;
     }
 
+    let mid_row = plot_height / 2;
+    let pw1 = (plot_height - 1) as f64;
+
     for (i, row) in grid.iter().enumerate() {
-        let _f2_val = f2_min + (f2_range * (plot_height - 1 - i) as f64 / (plot_height - 1).max(1) as f64);
+        let _f2_val = f2_min + (f2_range * (plot_height - 1 - i) as f64 / pw1);
         let label = if i == 0 {
             format!("{:>8.2} ┤", f2_max)
         } else if i == plot_height - 1 {
             format!("{:>8.2} ┤", f2_min)
-        } else if i == plot_height / 2 {
+        } else if i == mid_row {
             format!("{:>8.2} ┤", (f2_min + f2_max) / 2.0)
         } else {
             format!("{:>8} │", "")
         };
 
-        let mut line_chars = String::new();
+        let mut line_chars = String::with_capacity(plot_width);
         for &count in row {
             let ch = match count {
                 0 => ' ',

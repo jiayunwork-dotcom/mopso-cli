@@ -310,7 +310,7 @@ fn start_optimization(
                     });
                 }
 
-                if iter % 25 == 0 || iter == max_iter || iter - last_scatter >= 25 {
+                if iter % 10 == 0 || iter == max_iter || iter - last_scatter >= 10 {
                     last_scatter = iter;
                     let archive_snapshot: Vec<Solution> = archive.iter()
                         .take(200)
