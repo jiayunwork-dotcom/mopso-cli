@@ -3,6 +3,7 @@ use crate::metrics;
 use crate::mopso;
 use crate::problem;
 use rand::SeedableRng;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
@@ -25,6 +26,7 @@ struct ProblemBenchmark {
 struct ConfigEntry {
     name: String,
     config: Config,
+    overridden_fields: HashSet<&'static str>,
 }
 
 struct ConfigLoadError {
@@ -56,36 +58,56 @@ fn apply_cli_overrides(
     variant: Option<&str>,
     stagnation_limit: Option<usize>,
     stagnation_threshold: Option<f64>,
-) {
+) -> HashSet<&'static str> {
+    let mut overridden: HashSet<&'static str> = HashSet::new();
     if let Some(v) = population_size {
         config.algorithm.population_size = v;
+        overridden.insert("pop");
     }
     if let Some(v) = max_iterations {
         config.algorithm.max_iterations = v;
+        overridden.insert("iter");
     }
     if let Some(v) = archive_size {
         config.algorithm.archive_size = v;
+        overridden.insert("archive");
     }
     if let Some(v) = inertia_weight {
         config.algorithm.inertia_weight = Some(crate::config::InertiaWeightConfig::Fixed(v));
+        overridden.insert("inertia");
     }
     if let Some(v) = c1 {
         config.algorithm.c1 = v;
+        overridden.insert("c1");
     }
     if let Some(v) = c2 {
         config.algorithm.c2 = v;
+        overridden.insert("c2");
     }
     if let Some(v) = grid_divisions {
         config.algorithm.grid_divisions = v;
+        overridden.insert("grid");
     }
     if let Some(v) = variant {
         config.algorithm.variant = v.to_string();
+        overridden.insert("variant");
     }
     if let Some(v) = stagnation_limit {
         config.algorithm.stagnation_limit = v;
+        overridden.insert("stag_limit");
     }
     if let Some(v) = stagnation_threshold {
         config.algorithm.stagnation_threshold = v;
+        overridden.insert("stag_thresh");
+    }
+    overridden
+}
+
+fn fmt_field<S: std::fmt::Display>(value: S, overridden: bool) -> String {
+    if overridden {
+        format!("{} (overridden)", value)
+    } else {
+        format!("{}", value)
     }
 }
 
@@ -135,7 +157,7 @@ pub fn run_benchmark(
         for path in &paths {
             match Config::from_file(path) {
                 Ok(mut cfg) => {
-                    apply_cli_overrides(
+                    let overridden = apply_cli_overrides(
                         &mut cfg,
                         population_size,
                         max_iterations,
@@ -151,6 +173,7 @@ pub fn run_benchmark(
                     entries.push(ConfigEntry {
                         name: config_name_from_path(path),
                         config: cfg,
+                        overridden_fields: overridden,
                     });
                 }
                 Err(e) => {
@@ -170,7 +193,7 @@ pub fn run_benchmark(
             Config::default()
         };
 
-        apply_cli_overrides(
+        let overridden = apply_cli_overrides(
             &mut config,
             population_size,
             max_iterations,
@@ -184,7 +207,7 @@ pub fn run_benchmark(
             stagnation_threshold,
         );
 
-        (vec![ConfigEntry { name: String::new(), config }], Vec::new())
+        (vec![ConfigEntry { name: String::new(), config, overridden_fields: overridden }], Vec::new())
     };
 
     if config_entries.is_empty() {
@@ -275,9 +298,9 @@ pub fn run_benchmark(
         }
     }
 
-    let multi_config = !config_entries.is_empty() && config_entries[0].name.is_empty() && config_entries.len() == 1;
+    let single_config = config_entries.len() == 1 && config_entries[0].name.is_empty();
 
-    let report = generate_report(&benchmarks, num_runs, &ref_point, &config_entries, multi_config, &config_errors);
+    let report = generate_report(&benchmarks, num_runs, &ref_point, &config_entries, single_config, &config_errors);
 
     std::fs::write(output_path, &report)
         .map_err(|e| format!("Cannot write report to '{}': {}", output_path, e))?;
@@ -285,6 +308,55 @@ pub fn run_benchmark(
     eprintln!("\nBenchmark report saved to {}", output_path);
 
     Ok(())
+}
+
+fn build_overview_order(benchmarks: &[ProblemBenchmark], single_config: bool) -> Vec<usize> {
+    if single_config {
+        (0..benchmarks.len()).collect()
+    } else {
+        let mut problem_order: Vec<String> = Vec::new();
+        for bm in benchmarks {
+            if !problem_order.contains(&bm.name) {
+                problem_order.push(bm.name.clone());
+            }
+        }
+        let mut config_order: Vec<String> = Vec::new();
+        for bm in benchmarks {
+            if let Some(ref cn) = bm.config_name {
+                if !config_order.contains(cn) {
+                    config_order.push(cn.clone());
+                }
+            }
+        }
+        let mut result: Vec<usize> = Vec::new();
+        for prob_name in &problem_order {
+            for cfg_name in &config_order {
+                for (i, bm) in benchmarks.iter().enumerate() {
+                    if bm.name == *prob_name && bm.config_name.as_deref() == Some(cfg_name.as_str()) {
+                        result.push(i);
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
+fn format_config_header(ce: &ConfigEntry) -> String {
+    let algo = &ce.config.algorithm;
+    let o = &ce.overridden_fields;
+    format!(
+        "variant={}, pop={}, iter={}, archive={}, c1={}, c2={}, grid={}, stag_limit={}, stag_thresh={}",
+        fmt_field(&algo.variant, o.contains("variant")),
+        fmt_field(algo.population_size, o.contains("pop")),
+        fmt_field(algo.max_iterations, o.contains("iter")),
+        fmt_field(algo.archive_size, o.contains("archive")),
+        fmt_field(format!("{:.2}", algo.c1), o.contains("c1")),
+        fmt_field(format!("{:.2}", algo.c2), o.contains("c2")),
+        fmt_field(algo.grid_divisions, o.contains("grid")),
+        fmt_field(algo.stagnation_limit, o.contains("stag_limit")),
+        fmt_field(format!("{:.0e}", algo.stagnation_threshold), o.contains("stag_thresh")),
+    )
 }
 
 fn generate_report(
@@ -300,19 +372,10 @@ fn generate_report(
     md.push_str("# MOPSO Benchmark Report\n\n");
 
     if single_config {
-        md.push_str(&format!("**Configuration**: variant={}, pop={}, iter={}, archive={}\n\n",
-            config_entries[0].config.algorithm.variant,
-            config_entries[0].config.algorithm.population_size,
-            config_entries[0].config.algorithm.max_iterations,
-            config_entries[0].config.algorithm.archive_size));
+        md.push_str(&format!("**Configuration**: {}\n\n", format_config_header(&config_entries[0])));
     } else {
         for ce in config_entries {
-            md.push_str(&format!("**Config `{}`**: variant={}, pop={}, iter={}, archive={}\n\n",
-                ce.name,
-                ce.config.algorithm.variant,
-                ce.config.algorithm.population_size,
-                ce.config.algorithm.max_iterations,
-                ce.config.algorithm.archive_size));
+            md.push_str(&format!("**Config `{}`**: {}\n\n", ce.name, format_config_header(ce)));
         }
     }
 
@@ -335,7 +398,9 @@ fn generate_report(
         md.push_str("|---------|--------|--------|--------|---------|----------|------------------|--------------|------------|\n");
     }
 
-    for bm in benchmarks {
+    let overview_order = build_overview_order(benchmarks, single_config);
+    for &idx in &overview_order {
+        let bm = &benchmarks[idx];
         if bm.error.is_some() {
             if single_config {
                 md.push_str(&format!("| {} | ERROR | ERROR | ERROR | ERROR | ERROR | ERROR | ERROR |\n", bm.name));

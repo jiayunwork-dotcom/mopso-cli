@@ -35,7 +35,7 @@ pub struct AlgorithmConfig {
     pub c2: f64,
     #[serde(default = "default_grid_divisions")]
     pub grid_divisions: usize,
-    #[serde(default)]
+    #[serde(default = "default_variant")]
     pub variant: String,
     #[serde(default = "default_stagnation_limit")]
     pub stagnation_limit: usize,
@@ -73,6 +73,7 @@ fn default_archive_size() -> usize { 200 }
 fn default_c1() -> f64 { 2.0 }
 fn default_c2() -> f64 { 2.0 }
 fn default_grid_divisions() -> usize { 20 }
+fn default_variant() -> String { "standard".to_string() }
 fn default_stagnation_limit() -> usize { 50 }
 fn default_stagnation_threshold() -> f64 { 1e-6 }
 
@@ -127,12 +128,44 @@ impl Default for Config {
 
 impl Config {
     pub fn from_toml(input: &str) -> Result<Self, String> {
-        toml::from_str(input).map_err(|e| format!("TOML parse error: {}", e))
+        let mut cfg: Self = toml::from_str(input).map_err(|e| format!("TOML parse error: {}", e))?;
+        cfg.normalize();
+        Ok(cfg)
     }
 
     pub fn from_file(path: &str) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Cannot read file '{}': {}", path, e))?;
         Self::from_toml(&content)
+    }
+
+    pub fn normalize(&mut self) {
+        if self.algorithm.variant.trim().is_empty() {
+            self.algorithm.variant = default_variant();
+        }
+        if self.algorithm.population_size == 0 {
+            self.algorithm.population_size = default_pop_size();
+        }
+        if self.algorithm.max_iterations == 0 {
+            self.algorithm.max_iterations = default_max_iter();
+        }
+        if self.algorithm.archive_size == 0 {
+            self.algorithm.archive_size = default_archive_size();
+        }
+        if self.algorithm.grid_divisions == 0 {
+            self.algorithm.grid_divisions = default_grid_divisions();
+        }
+        if self.algorithm.c1 == 0.0 {
+            self.algorithm.c1 = default_c1();
+        }
+        if self.algorithm.c2 == 0.0 {
+            self.algorithm.c2 = default_c2();
+        }
+        if self.algorithm.stagnation_limit == 0 {
+            self.algorithm.stagnation_limit = default_stagnation_limit();
+        }
+        if self.algorithm.stagnation_threshold == 0.0 {
+            self.algorithm.stagnation_threshold = default_stagnation_threshold();
+        }
     }
 }
